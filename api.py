@@ -1,34 +1,24 @@
 from fastapi import FastAPI, Header, HTTPException, Request
 from datetime import datetime
-import json
-import os
 
 app = FastAPI()
 
 API_KEY = "secret123"
-LOG_FILE = "loggedips.log"
 
-# Create a fresh log file on every deployment/start
-@app.on_event("startup")
-def startup_event():
-    with open(LOG_FILE, "w", encoding="utf-8") as f:
-        f.write("=== MINECRAFT IP LOGGER STARTED ===\n\n")
+# In-memory storage (Railway-safe)
+LOG_STORAGE = []
 
 @app.get("/")
 def home():
     return {
         "status": "API running",
-        "logging": True,
-        "endpoint": "/log"
+        "endpoints": {
+            "post_log": "/log",
+            "get_logs": "/logs"
+        }
     }
 
-@app.get("/secure")
-def secure(x_api_key: str = Header(None)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    return {"access": "granted"}
-
-# ⭐ MAIN LOGGER ENDPOINT (your finder uses this)
+# Finder sends data here
 @app.post("/log")
 async def log_ip(request: Request, x_api_key: str = Header(None)):
     if x_api_key != API_KEY:
@@ -42,10 +32,8 @@ async def log_ip(request: Request, x_api_key: str = Header(None)):
     ip = data.get("ip", "unknown")
     info = data.get("info", {})
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    log_entry = {
-        "time": timestamp,
+    entry = {
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "ip": ip,
         "players": info.get("players"),
         "max_players": info.get("max_players"),
@@ -53,11 +41,30 @@ async def log_ip(request: Request, x_api_key: str = Header(None)):
         "source": info.get("source", "finder")
     }
 
-    # Append to log file (auto created if missing)
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry) + "\n")
+    LOG_STORAGE.append(entry)
 
     return {
         "status": "logged",
-        "ip": ip
+        "ip": ip,
+        "stored_count": len(LOG_STORAGE)
     }
+
+# Your external script will fetch logs from here
+@app.get("/logs")
+def get_logs(x_api_key: str = Header(None)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
+
+    return {
+        "count": len(LOG_STORAGE),
+        "logs": LOG_STORAGE
+    }
+
+# Optional: clear logs endpoint
+@app.delete("/logs")
+def clear_logs(x_api_key: str = Header(None)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
+
+    LOG_STORAGE.clear()
+    return {"status": "cleared"}
